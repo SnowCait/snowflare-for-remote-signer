@@ -6,6 +6,11 @@ compatibility_flags = [ "nodejs_compat" ]
 [assets]
 directory = "./public/"
 
+[durable_objects]
+bindings = [
+  { class_name = "Relay", name = "RELAY" },
+]
+
 [observability]
 enabled = true
 head_sampling_rate = 1
