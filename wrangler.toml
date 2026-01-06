@@ -16,5 +16,4 @@ new_sqlite_classes = ["Relay"]
 tag = "v1"
 
 [observability]
-enabled = true
-head_sampling_rate = 1
+enabled = false
