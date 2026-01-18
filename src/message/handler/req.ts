@@ -21,8 +21,6 @@ export class ReqMessageHandler implements MessageHandler {
   }
 
   async handle(ctx: DurableObjectState, ws: WebSocket): Promise<void> {
-    console.debug("[REQ]", { filters: this.#filters });
-
     if (this.#subscriptionId.length > nip11.limitation.max_subid_length) {
       console.debug("[too long subscription id]", this.#subscriptionId);
       ws.send(
@@ -36,7 +34,6 @@ export class ReqMessageHandler implements MessageHandler {
     }
 
     if (this.#filters.length > nip11.limitation.max_filters) {
-      console.debug("[too many filters]", { filters: this.#filters });
       ws.send(
         JSON.stringify([
           "CLOSED",
@@ -48,7 +45,6 @@ export class ReqMessageHandler implements MessageHandler {
     }
 
     if (this.#filters.some((filter) => !validateFilter(filter))) {
-      console.debug("[unsupported filters]", { filters: this.#filters });
       ws.send(
         JSON.stringify([
           "CLOSED",
@@ -63,10 +59,13 @@ export class ReqMessageHandler implements MessageHandler {
     const subscriptions =
       (await ctx.storage.get<Map<string, Filter[]>>(connection.id)) ??
       new Map<string, Filter[]>();
-    console.debug("[subscriptions]", connection.id, subscriptions);
     subscriptions.set(this.#subscriptionId, this.#filters);
     if (subscriptions.size > nip11.limitation.max_subscriptions) {
-      console.debug("[too many subscriptions]", { connection });
+      console.debug(
+        "[too many subscriptions]",
+        connection.id,
+        subscriptions.size,
+      );
       ws.send(
         JSON.stringify([
           "CLOSED",

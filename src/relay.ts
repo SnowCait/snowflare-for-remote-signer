@@ -52,6 +52,7 @@ export class Relay extends DurableObject<Bindings> {
           challenge,
           challengedAt: Date.now(),
         },
+        pubkeys: new Set(),
       } satisfies Connection;
       server.serializeAttachment(connection);
     } else {
@@ -59,6 +60,7 @@ export class Relay extends DurableObject<Bindings> {
         id: connectionId,
         ipAddress,
         url: this.#convertToWebSocketUrl(request.url),
+        pubkeys: new Set(),
       } satisfies Connection;
       server.serializeAttachment(connection);
     }
@@ -98,7 +100,9 @@ export class Relay extends DurableObject<Bindings> {
   }
 
   async prune(): Promise<number> {
-    const connections = await this.ctx.storage.list<Map<string, Filter[]>>();
+    const connections = await this.ctx.storage.list<Map<string, Filter[]>>({
+      limit: 2000,
+    });
     connections.delete("maintenance"); // Exclude non-connections
     const availableConnectionIds = this.ctx
       .getWebSockets()
@@ -129,8 +133,6 @@ export class Relay extends DurableObject<Bindings> {
       return;
     }
 
-    console.debug("[ws message]", message);
-
     const handler = MessageHandlerFactory.create(
       message,
       this.#eventsRepository,
@@ -145,7 +147,7 @@ export class Relay extends DurableObject<Bindings> {
     wasClean: boolean,
   ): Promise<void> {
     console.debug("[ws close]", code, reason, wasClean, ws.readyState);
-    this.#cleanUp(ws);
+    await this.#cleanUp(ws);
   }
 
   async #cleanUp(ws: WebSocket): Promise<void> {
