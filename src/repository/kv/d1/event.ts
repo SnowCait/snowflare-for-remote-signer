@@ -1,4 +1,5 @@
-import { Event, Filter, sortEvents } from "nostr-tools";
+import { NostrEvent, sortEvents } from "nostr-tools/core";
+import { Filter } from "nostr-tools/filter";
 import { EventRepository } from "../../event";
 import { Bindings } from "../../../app";
 import { config, nip11 } from "../../../config";
@@ -6,9 +7,10 @@ import {
   hexRegExp,
   hexTagKeys,
   idsFilterKeys,
+  RequestToVanish,
   tagsFilterRegExp,
 } from "../../../nostr";
-import { EventDeletion } from "nostr-tools/kinds";
+import { EventDeletion, GiftWrap } from "nostr-tools/kinds";
 import Cloudflare from "cloudflare";
 
 export class KvD1EventRepository implements EventRepository {
@@ -18,19 +20,19 @@ export class KvD1EventRepository implements EventRepository {
     this.#env = env;
   }
 
-  async save(event: Event, ipAddress: string | null): Promise<void> {
+  async save(event: NostrEvent, ipAddress: string | null): Promise<void> {
     console.debug("[save event]", { event });
     await this.#saveToKV(event, ipAddress);
     await this.#saveToD1(event); // Execute after KV
   }
 
-  async #saveToKV(event: Event, ipAddress: string | null): Promise<void> {
+  async #saveToKV(event: NostrEvent, ipAddress: string | null): Promise<void> {
     await this.#env.events.put(event.id, JSON.stringify(event), {
       metadata: { ipAddress, receivedAt: Date.now() },
     });
   }
 
-  async #saveToD1(event: Event): Promise<void> {
+  async #saveToD1(event: NostrEvent): Promise<void> {
     const indexedTags = event.tags.filter(
       ([name, value]) =>
         tagsFilterRegExp.test(`#${name}`) && typeof value === "string",
@@ -60,7 +62,7 @@ export class KvD1EventRepository implements EventRepository {
   }
 
   async saveReplaceableEvent(
-    event: Event,
+    event: NostrEvent,
     ipAddress: string | null,
   ): Promise<void> {
     const { results } = await this.#env.DB.prepare(
@@ -75,7 +77,7 @@ export class KvD1EventRepository implements EventRepository {
   }
 
   async saveAddressableEvent(
-    event: Event,
+    event: NostrEvent,
     ipAddress: string | null,
   ): Promise<void> {
     const identifier = event.tags.find(([name]) => name === "d")?.at(1) ?? "";
@@ -95,7 +97,7 @@ export class KvD1EventRepository implements EventRepository {
   }
 
   async #saveLatestEvent(
-    event: Event,
+    event: NostrEvent,
     results: { id: string; created_at: number }[],
     ipAddress: string | null,
   ): Promise<void> {
@@ -122,7 +124,7 @@ export class KvD1EventRepository implements EventRepository {
    * but this is a rare case and considering the D1 cost (to use covering index), it is allowed at the moment.
    * If this is not acceptable, process everything in a batch.
    */
-  async deleteBy(event: Event): Promise<void> {
+  async deleteBy(event: NostrEvent): Promise<void> {
     const ids = event.tags
       .filter(([name, value]) => name === "e" && hexRegExp.test(value))
       .map(([, id]) => id);
@@ -137,7 +139,10 @@ export class KvD1EventRepository implements EventRepository {
     ).run<{ id: string; pubkey: string; kind: number }>();
     const deleteIds = results
       .filter(
-        ({ pubkey, kind }) => pubkey === event.pubkey && kind !== EventDeletion,
+        ({ pubkey, kind }) =>
+          pubkey === event.pubkey &&
+          kind !== EventDeletion &&
+          kind !== RequestToVanish,
       )
       .map(({ id }) => id);
     await this.#delete(deleteIds);
@@ -158,7 +163,34 @@ export class KvD1EventRepository implements EventRepository {
     }
   }
 
-  async find(filter: Filter): Promise<Event[]> {
+  async vanishBy(event: NostrEvent): Promise<void> {
+    const result = await this.#env.DB.prepare(
+      "DELETE FROM events WHERE pubkey = UNHEX(?) AND created_at <= ? AND kind NOT IN (?, ?)",
+    )
+      .bind(event.pubkey, event.created_at, EventDeletion, RequestToVanish)
+      .run<void>();
+    console.debug("[vanish result]", { result });
+    const giftWrapResult = await this.#env.DB.prepare(
+      `DELETE FROM events WHERE
+        EXISTS(SELECT 1 FROM json_each(json_extract(tags, '$.p')) WHERE json_each.value = ?) AND
+        created_at <= ? AND
+        kind = ?`,
+    )
+      .bind(event.pubkey, event.created_at, GiftWrap)
+      .run<void>();
+    console.debug("[vanish result gift wrap]", { result: giftWrapResult });
+  }
+
+  async expire(until: number): Promise<void> {
+    const result = await this.#env.DB.prepare(
+      "DELETE FROM events WHERE created_at < ? AND kind NOT IN (?, ?)",
+    )
+      .bind(until, EventDeletion, RequestToVanish)
+      .run<void>();
+    console.debug("[expire result]", { result });
+  }
+
+  async find(filter: Filter): Promise<NostrEvent[]> {
     if (
       Object.keys(filter).every((key) => idsFilterKeys.includes(key)) &&
       Array.isArray(filter.ids) &&
@@ -170,7 +202,7 @@ export class KvD1EventRepository implements EventRepository {
     }
   }
 
-  async #findByIds(ids: string[]): Promise<Event[]> {
+  async #findByIds(ids: string[]): Promise<NostrEvent[]> {
     // Workaround: The local environment runs on Miniflare but cannot be accessed via the REST API.
     if (this.#env.LOCAL === "true") {
       const events = await Promise.all(
@@ -180,7 +212,7 @@ export class KvD1EventRepository implements EventRepository {
             if (json === null) {
               return null;
             }
-            return JSON.parse(json) as Event;
+            return JSON.parse(json) as NostrEvent;
           } catch (error) {
             console.error("[json parse failed]", error, `(${ids.length})`);
             return null;
@@ -196,7 +228,7 @@ export class KvD1EventRepository implements EventRepository {
 
       const client = new Cloudflare({ apiToken: this.#env.API_TOKEN });
       const events = await Promise.all(
-        chunk(ids, 100).map(async (ids: string[]): Promise<Event[]> => {
+        chunk(ids, 100).map(async (ids: string[]): Promise<NostrEvent[]> => {
           const response = await client.kv.namespaces.keys.bulkGet(
             this.#env.KV_ID_EVENTS,
             {
@@ -214,7 +246,7 @@ export class KvD1EventRepository implements EventRepository {
     }
   }
 
-  async #findByQuery(filter: Filter): Promise<Event[]> {
+  async #findByQuery(filter: Filter): Promise<NostrEvent[]> {
     const wheres: string[] = [];
     const params: string[] = [];
 

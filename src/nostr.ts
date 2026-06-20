@@ -1,9 +1,9 @@
-import { Event } from "nostr-tools/core";
+import { NostrEvent } from "nostr-tools/core";
 import { Filter, matchFilter } from "nostr-tools/filter";
 import { NostrConnect } from "nostr-tools/kinds";
 import { nip11 } from "./config";
 
-export const hexRegExp = /^[0-9a-z]{64}$/;
+export const hexRegExp = /^[0-9a-f]{64}$/;
 export const tagsFilterRegExp = /^#[a-zA-Z]$/;
 
 export const idsFilterKeys: string[] = ["ids", "limit"] satisfies Array<
@@ -81,7 +81,7 @@ export function validateFilter(filter: Filter): boolean {
     filter.limit !== undefined &&
     !(
       Number.isInteger(filter.limit) &&
-      0 < filter.limit &&
+      0 <= filter.limit &&
       filter.limit <= nip11.limitation.max_limit
     )
   ) {
@@ -115,7 +115,7 @@ export function validateFilter(filter: Filter): boolean {
   return true;
 }
 
-export function broadcastable(filter: Filter, event: Event): boolean {
+export function broadcastable(filter: Filter, event: NostrEvent): boolean {
   if (!matchFilter(filter, event)) {
     return false;
   }
@@ -127,3 +127,29 @@ export function broadcastable(filter: Filter, event: Event): boolean {
 
   return true;
 }
+
+//#region NIP-62 Request to Vanish
+
+export const RequestToVanish = 62;
+export type RequestToVanish = typeof RequestToVanish;
+
+export function isVanishTarget(event: NostrEvent, url: string): boolean {
+  const relays = event.tags
+    .filter((tag) => tag[0] === "relay" && typeof tag[1] === "string")
+    .map(([, url]) => url);
+  return relays.some(
+    (relay) =>
+      relay === "ALL_RELAYS" ||
+      (URL.canParse(relay) && new URL(relay).origin === new URL(url).origin),
+  );
+}
+
+//#endregion
+
+//#region NIP-70 Protected Events
+
+export function isProtectedEvent(event: NostrEvent): boolean {
+  return event.tags.some(([name]) => name === "-");
+}
+
+//#endregion

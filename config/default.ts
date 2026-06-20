@@ -7,7 +7,7 @@ export default {
     icon: "https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/72x72/2744.png",
     pubkey: "",
     contact: "",
-    supported_nips: [1, 9, 11, 42, 46, 70],
+    supported_nips: [1, 9, 11, 42, 46, 62, 70],
     software: "https://github.com/SnowCait/snowflare",
     version: "0.1.0",
     limitation: {
@@ -23,4 +23,5 @@ export default {
   auth_limit: 5, // Within the Connection size limit
   default_limit: 50,
   repository_type: "kv-d1",
+  expiration: undefined,
 } as const satisfies Config;

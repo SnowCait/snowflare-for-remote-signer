@@ -1,4 +1,5 @@
-import { Event, Filter, verifyEvent } from "nostr-tools";
+import { NostrEvent, verifyEvent } from "nostr-tools/pure";
+import { Filter } from "nostr-tools/filter";
 import { MessageHandler } from "../handler";
 import { Connection } from "../../connection";
 import { nip11 } from "../../config";
@@ -8,15 +9,21 @@ import {
   isEphemeralKind,
   isAddressableKind,
   isReplaceableKind,
+  Repost,
 } from "nostr-tools/kinds";
 import { sendAuthChallenge } from "../sender/auth";
-import { broadcastable } from "../../nostr";
+import {
+  broadcastable,
+  isProtectedEvent,
+  isVanishTarget,
+  RequestToVanish,
+} from "../../nostr";
 
 export class EventMessageHandler implements MessageHandler {
-  #event: Event;
+  #event: NostrEvent;
   #eventsRepository: EventRepository;
 
-  constructor(event: Event, eventsRepository: EventRepository) {
+  constructor(event: NostrEvent, eventsRepository: EventRepository) {
     this.#event = event;
     this.#eventsRepository = eventsRepository;
   }
@@ -29,10 +36,12 @@ export class EventMessageHandler implements MessageHandler {
     }
 
     const connection = ws.deserializeAttachment() as Connection;
-    const { auth } = connection;
 
-    if (auth === undefined || !connection.pubkeys.has(this.#event.pubkey)) {
-      const isProtected = this.#event.tags.some(([name]) => name === "-");
+    if (
+      connection.auth === undefined ||
+      !connection.pubkeys.has(this.#event.pubkey)
+    ) {
+      const isProtected = isProtectedEvent(this.#event);
 
       if (
         nip11.limitation.auth_required ||
@@ -57,6 +66,25 @@ export class EventMessageHandler implements MessageHandler {
           ]),
         );
         return;
+      }
+    }
+
+    if (this.#event.kind === Repost && this.#event.content.startsWith("{")) {
+      try {
+        const repostedEvent = JSON.parse(this.#event.content) as NostrEvent;
+        if (isProtectedEvent(repostedEvent)) {
+          ws.send(
+            JSON.stringify([
+              "OK",
+              this.#event.id,
+              false,
+              "blocked: reposts can't embed protected events",
+            ]),
+          );
+          return;
+        }
+      } catch {
+        // Noop
       }
     }
 
@@ -88,8 +116,17 @@ export class EventMessageHandler implements MessageHandler {
       );
     } else if (!isEphemeralKind(this.#event.kind)) {
       await this.#eventsRepository.save(this.#event, connection.ipAddress);
-      if (this.#event.kind === EventDeletion) {
-        await this.#eventsRepository.deleteBy(this.#event);
+      switch (this.#event.kind) {
+        case EventDeletion: {
+          await this.#eventsRepository.deleteBy(this.#event);
+          break;
+        }
+        case RequestToVanish: {
+          if (isVanishTarget(this.#event, connection.url)) {
+            await this.#eventsRepository.vanishBy(this.#event);
+          }
+          break;
+        }
       }
     }
 

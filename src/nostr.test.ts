@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { broadcastable, validateFilter } from "./nostr";
+import {
+  broadcastable,
+  isProtectedEvent,
+  isVanishTarget,
+  RequestToVanish,
+  validateFilter,
+} from "./nostr";
 import { finalizeEvent, generateSecretKey } from "nostr-tools/pure";
 import { NostrConnect } from "nostr-tools/kinds";
 
@@ -89,8 +95,8 @@ describe("validate filter", () => {
     expect(validateFilter({ until: -1 })).toBe(false);
   });
   it("limit", () => {
-    expect(validateFilter({ limit: 0 })).toBe(false);
-    expect(validateFilter({ limit: 1 })).toBe(true);
+    expect(validateFilter({ limit: -1 })).toBe(false);
+    expect(validateFilter({ limit: 0 })).toBe(true);
     expect(validateFilter({ limit: 500 })).toBe(true);
     expect(validateFilter({ limit: 501 })).toBe(false);
     expect(validateFilter({ limit: "" as any })).toBe(false); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -216,3 +222,90 @@ describe("broadcastable", () => {
     ).toBe(false);
   });
 });
+
+//#region NIP-62 Request to Vanish
+
+describe("isVanishTarget", () => {
+  const url = "wss://example.com/";
+  const seckey = generateSecretKey();
+
+  it("returns true if the event has an ALL_RELAYS tag", () => {
+    const event = finalizeEvent(
+      {
+        kind: RequestToVanish,
+        tags: [["relay", "ALL_RELAYS"]],
+        content: "",
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      seckey,
+    );
+
+    expect(isVanishTarget(event, url)).toBe(true);
+  });
+
+  it("returns true if the event has a relay tag matching the given URL", () => {
+    const event = finalizeEvent(
+      {
+        kind: RequestToVanish,
+        tags: [["relay", url]],
+        content: "",
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      seckey,
+    );
+
+    expect(isVanishTarget(event, url)).toBe(true);
+  });
+
+  it("returns false if the event does not have a relay tag matching the given URL", () => {
+    const event = finalizeEvent(
+      {
+        kind: RequestToVanish,
+        tags: [["relay", "wss://wrong.com/"]],
+        content: "",
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      seckey,
+    );
+
+    expect(isVanishTarget(event, url)).toBe(false);
+  });
+});
+
+//#endregion
+
+//#region NIP-70 Protected Events
+
+describe("isProtectedEvent", () => {
+  const seckey = generateSecretKey();
+
+  it("returns true if the event has a - tag", () => {
+    const event = finalizeEvent(
+      {
+        kind: 1,
+        tags: [["-"]],
+        content: "",
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      seckey,
+    );
+
+    expect(isProtectedEvent(event)).toBe(true);
+  });
+
+  it("returns false if the event does not have a - tag", () => {
+    const event = finalizeEvent(
+      {
+        kind: 1,
+        tags: [],
+        content: "",
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      seckey,
+    );
+
+    expect(isProtectedEvent(event)).toBe(false);
+  });
+});
+
+//#endregion
